@@ -13,7 +13,10 @@
   button:hover, .btn:hover { background: #1e4e79; }
   button:disabled { opacity: .6; cursor: wait; }
   .btn input { display: none; }
-  #stage { position: relative; width: 100%; max-width: 1200px; }
+  #viewer { overflow: auto; max-height: 75vh; border: 1px solid #ccc; background: #fff; }
+  #stage { position: relative; width: 100%; }
+  #zoombar { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  #zoombar button { min-width: 44px; font-size: 18px; }
   #bg { display: none; width: 100%; height: auto; }
   #stage .canvas-container { position: absolute !important; left: 0; top: 0; }
   canvas { background: transparent; }
@@ -38,8 +41,14 @@
   <button id="syncBtn" onclick="syncSheets()" style="background:#28a745">🚀 Sync to Google Sheets</button>
 </div>
 
-<div id="status">v5 · No image loaded yet</div>
-<div id="stage"><img id="bg" alt=""><canvas id="layoutCanvas" width="800" height="600"></canvas></div>
+<div id="status">v6 · No image loaded yet</div>
+<div id="zoombar">
+  <button onclick="zoomBy(-0.5)">−</button>
+  <span id="zoomLabel">100%</span>
+  <button onclick="zoomBy(0.5)">+</button>
+  <button onclick="if (baseW) applyZoom(1)" style="background:#6c757d">Fit</button>
+</div>
+<div id="viewer"><div id="stage"><img id="bg" alt=""><canvas id="layoutCanvas" width="800" height="600"></canvas></div></div>
 
 <div id="dataModal" class="modal">
   <h3 style="margin-top:0">Panel Details</h3>
@@ -78,7 +87,7 @@
   const WORKER_URL = "https://patient-truth-615b.app-standardengineering.workers.dev/";
 
   const $ = id => document.getElementById(id);
-  const canvas = new fabric.Canvas('layoutCanvas', { selection: false });
+  const canvas = new fabric.Canvas('layoutCanvas', { selection: false, allowTouchScrolling: true, enableRetinaScaling: false });
   const records = [];
   const tags = {};
   const synced = new Set();
@@ -88,7 +97,7 @@
   // The photo is shown in a plain <img>; the fabric canvas sits transparently on top for tags
   canvas.wrapperEl.style.display = 'none'; // hidden until an image is loaded
   let currentUrl = null;
-  function setStatus(t) { $('status').textContent = 'v5 · ' + t; }
+  function setStatus(t) { $('status').textContent = 'v6 · ' + t; }
 
   // Image loading (camera + file share one handler)
   function loadInto(bg, url) {
@@ -142,18 +151,53 @@
     }
 
     bg.style.display = 'block';
-    canvas.setDimensions({ width: $('stage').clientWidth, height: bg.clientHeight });
+    zoom = 1;
+    baseW = Math.min($('viewer').clientWidth, 1000);
+    $('stage').style.width = baseW + 'px';
+    baseH = bg.clientHeight;
+    $('viewer').scrollLeft = 0;
+    $('viewer').scrollTop = 0;
     canvas.wrapperEl.style.display = 'block';
-    canvas.renderAll();
+    applyZoom(1);
     input.value = '';
     setStatus('Image loaded (' + bg.naturalWidth + '×' + bg.naturalHeight + '). Tap the image to add a tag.');
   }
   $('camLoader').addEventListener('change', loadImage);
   $('fileLoader').addEventListener('change', loadImage);
 
-  // Tap/click on the canvas opens the form (works for mouse and touch)
-  canvas.on('mouse:down', o => {
-    point = canvas.getPointer(o.e);
+  // Zoom: the stage gets wider and the canvas follows; the viewer scrolls to pan
+  let zoom = 1, baseW = 0, baseH = 0;
+  const MAX_ZOOM = 4;
+  function applyZoom(z) {
+    const v = $('viewer');
+    const cx = (v.scrollLeft + v.clientWidth / 2) / zoom; // keep the middle of the view in place
+    const cy = (v.scrollTop + v.clientHeight / 2) / zoom;
+    zoom = Math.min(MAX_ZOOM, Math.max(1, z));
+    $('stage').style.width = (baseW * zoom) + 'px';
+    canvas.setDimensions({ width: baseW * zoom, height: baseH * zoom });
+    canvas.setZoom(zoom);
+    v.scrollLeft = cx * zoom - v.clientWidth / 2;
+    v.scrollTop = cy * zoom - v.clientHeight / 2;
+    $('zoomLabel').textContent = Math.round(zoom * 100) + '%';
+  }
+  function zoomBy(d) { if (baseW) applyZoom(zoom + d); }
+
+  // A quick tap opens the form; dragging pans the image (native scrolling)
+  const up = canvas.upperCanvasEl;
+  up.style.touchAction = canvas.wrapperEl.style.touchAction = 'pan-x pan-y';
+  let down = null;
+  up.addEventListener('pointerdown', e => {
+    down = e.isPrimary ? { x: e.clientX, y: e.clientY, t: Date.now() } : null;
+  });
+  up.addEventListener('pointercancel', () => { down = null; }); // the browser took over for scrolling
+  up.addEventListener('pointerup', e => {
+    if (!down) return;
+    const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+    const quick = Date.now() - down.t < 700;
+    down = null;
+    if (moved > 10 || !quick) return; // a pan or long press, not a tap
+    const r = up.getBoundingClientRect();
+    point = { x: (e.clientX - r.left) / zoom, y: (e.clientY - r.top) / zoom };
     $('dataModal').style.display = 'block';
   });
 
@@ -177,12 +221,17 @@
     });
 
     const color = category === 'Duct Wall' ? 'green' : category === 'Dead Wall' ? 'blue' : 'red';
-    const tag = new fabric.Text(`[${id}] ${desc}\nL:${length} H:${height}`, {
-      left: point.x, top: point.y, fontSize: Math.max(11, Math.round(canvas.width / 55)),
-      fill: 'white', backgroundColor: color, padding: 5, selectable: false, evented: false
+    const k = 1 / zoom; // pin and label keep the same size on screen at any zoom
+    const dot = new fabric.Circle({
+      left: point.x, top: point.y, radius: 5 * k, fill: color, stroke: 'white', strokeWidth: 1.5 * k,
+      originX: 'center', originY: 'center', selectable: false, evented: false
     });
-    tags[id] = tag;
-    canvas.add(tag);
+    const label = new fabric.Text(`[${id}] ${desc}\nL:${length} H:${height}`, {
+      left: point.x + 8 * k, top: point.y + 8 * k, fontSize: 13 * k,
+      fill: 'white', backgroundColor: color, selectable: false, evented: false
+    });
+    tags[id] = [dot, label];
+    canvas.add(dot, label);
 
     ['desc', 'length', 'height'].forEach(k => $(k).value = '');
     closeModal();
@@ -194,7 +243,7 @@
     if (!last) return;
     if (synced.has(last.panelId)) return alert('That row is already in Google Sheets, so it cannot be undone here.');
     records.pop();
-    canvas.remove(tags[last.panelId]);
+    tags[last.panelId].forEach(o => canvas.remove(o));
     delete tags[last.panelId];
     counter--;
     updateTable();
