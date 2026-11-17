@@ -38,7 +38,7 @@
   <button id="syncBtn" onclick="syncSheets()" style="background:#28a745">🚀 Sync to Google Sheets</button>
 </div>
 
-<div id="status">v3 · No image loaded yet</div>
+<div id="status">v4 · No image loaded yet</div>
 <div id="stage"><img id="bg" alt=""><canvas id="layoutCanvas" width="800" height="600"></canvas></div>
 
 <div id="dataModal" class="modal">
@@ -88,33 +88,66 @@
   // The photo is shown in a plain <img>; the fabric canvas sits transparently on top for tags
   canvas.wrapperEl.style.display = 'none'; // hidden until an image is loaded
   let currentUrl = null;
-  function setStatus(t) { $('status').textContent = 'v3 · ' + t; }
+  function setStatus(t) { $('status').textContent = 'v4 · ' + t; }
 
   // Image loading (camera + file share one handler)
-  function loadImage(e) {
+  function loadInto(bg, url) {
+    return new Promise((resolve, reject) => {
+      bg.onload = () => resolve();
+      bg.onerror = () => reject(new Error('decode failed'));
+      bg.src = url;
+    });
+  }
+
+  async function loadImage(e) {
     const input = e.target;
     const file = input.files && input.files[0];
     if (!file) { setStatus('The picker did not return a file'); return; }
-    setStatus('Selected ' + file.name + ' (' + Math.round(file.size / 1024) + ' KB, ' + (file.type || 'unknown type') + ')…');
-    if (currentUrl) URL.revokeObjectURL(currentUrl);
-    currentUrl = URL.createObjectURL(file);
+    const info = file.name + ' (' + Math.round(file.size / 1024) + ' KB, ' + (file.type || 'unknown type') + ')';
+    setStatus('Reading ' + info + '…');
+
+    // Copy the bytes right away; some Android pickers make the file unreadable later
+    let blob;
+    try {
+      blob = new Blob([await file.arrayBuffer()], { type: file.type || 'image/jpeg' });
+    } catch (err) {
+      setStatus('Could not read ' + info + ' — ' + err.name);
+      alert('Could not read this file. Try saving it to the phone first, or use Take photo.');
+      input.value = '';
+      return;
+    }
+    input.value = '';
+
     const bg = $('bg');
-    bg.onload = () => {
-      bg.style.display = 'block';
-      const w = $('stage').clientWidth;
-      const h = bg.clientHeight;
-      canvas.setDimensions({ width: w, height: h });
-      canvas.wrapperEl.style.display = 'block';
-      canvas.renderAll();
-      setStatus('Image loaded (' + bg.naturalWidth + '×' + bg.naturalHeight + '). Tap the image to add a tag.');
-      input.value = '';
-    };
-    bg.onerror = () => {
-      setStatus('The browser could not read this image (' + (file.type || 'unknown type') + ')');
-      alert('Could not open this image. Try a JPEG or PNG.');
-      input.value = '';
-    };
-    bg.src = currentUrl;
+    if (currentUrl) URL.revokeObjectURL(currentUrl);
+    currentUrl = URL.createObjectURL(blob);
+    try {
+      await loadInto(bg, currentUrl);
+    } catch (_) {
+      try {
+        // Fallback: decode manually and shrink (very large photos, unusual encodings)
+        const bmp = await createImageBitmap(blob);
+        const k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+        const off = document.createElement('canvas');
+        off.width = Math.round(bmp.width * k);
+        off.height = Math.round(bmp.height * k);
+        off.getContext('2d').drawImage(bmp, 0, 0, off.width, off.height);
+        const out = await new Promise(r => off.toBlob(r, 'image/jpeg', 0.9));
+        URL.revokeObjectURL(currentUrl);
+        currentUrl = URL.createObjectURL(out);
+        await loadInto(bg, currentUrl);
+      } catch (err) {
+        setStatus('Cannot decode ' + info + ' — ' + ((err && err.name) || 'error'));
+        alert('Your browser cannot open this image (' + (file.type || 'unknown type') + '). Try another photo or use Take photo.');
+        return;
+      }
+    }
+
+    bg.style.display = 'block';
+    canvas.setDimensions({ width: $('stage').clientWidth, height: bg.clientHeight });
+    canvas.wrapperEl.style.display = 'block';
+    canvas.renderAll();
+    setStatus('Image loaded (' + bg.naturalWidth + '×' + bg.naturalHeight + '). Tap the image to add a tag.');
   }
   $('camLoader').addEventListener('change', loadImage);
   $('fileLoader').addEventListener('change', loadImage);
