@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Layout Data Capture</title>
+    <!-- Load Fabric.js for Canvas Drawing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <!-- Load SheetJS for Excel Generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f9; margin: 20px; }
+        .controls { margin-bottom: 15px; padding: 10px; background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        canvas { border: 1px solid #ccc; background: #fff; box-shadow: 0 2px 5px rgba(0,0,0,0.1); cursor: crosshair; }
+        .modal { display: none; position: absolute; background: white; padding: 15px; border: 1px solid #333; box-shadow: 0 4px 8px rgba(0,0,0,0.2); z-index: 10; border-radius: 8px; }
+        .modal input, .modal select { margin-bottom: 10px; width: 100%; padding: 5px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+        button { padding: 8px 12px; background: #2f75b5; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #1e4e79; }
+    </style>
+</head>
+<body>
+
+<div class="controls">
+    <input type="file" id="imageLoader" accept="image/*" />
+    <button onclick="downloadExcel()">📥 Download Excel</button>
+    <button onclick="submitToCloudflare()" style="background: #28a745;">🚀 Sync to Google Sheets</button>
+</div>
+
+<canvas id="layoutCanvas" width="800" height="600"></canvas>
+
+<!-- Data Entry Modal -->
+<div id="dataModal" class="modal">
+    <h3 style="margin-top:0;">Panel Details</h3>
+    <input type="hidden" id="clickX">
+    <input type="hidden" id="clickY">
+    
+    <label>Type:</label>
+    <select id="entryType">
+        <option value="Main">Main Panel</option>
+        <option value="Add">Addition (+)</option>
+        <option value="Ded">Deduction (-)</option>
+    </select>
+    
+    <label>Description (Panel/Window/Patta):</label>
+    <input type="text" id="desc" required>
+    
+    <div style="display: flex; gap: 10px;">
+        <div><label>Length:</label><input type="number" step="0.01" id="length"></div>
+        <div><label>Height:</label><input type="number" step="0.01" id="height"></div>
+    </div>
+    
+    <label>Category:</label>
+    <select id="category">
+        <option value="Standard">Standard</option>
+        <option value="Duct Wall">Duct Wall</option>
+        <option value="Dead Wall">Dead Wall</option>
+    </select>
+    
+    <button onclick="saveData()">Save Tag</button>
+    <button onclick="closeModal()" style="background: #dc3545;">Cancel</button>
+</div>
+
+<table id="dataTable">
+    <thead>
+        <tr>
+            <th>ID</th><th>Type</th><th>Desc</th><th>L</th><th>H</th><th>Category</th><th>Total</th>
+        </tr>
+    </thead>
+    <tbody id="tableBody"></tbody>
+</table>
+
+<script>
+    // Initialize Canvas
+    const canvas = new fabric.Canvas('layoutCanvas');
+    let capturedData = [];
+    let panelCounter = 1;
+
+    // Handle Image Upload
+    document.getElementById('imageLoader').addEventListener('change', function(e) {
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            fabric.Image.fromURL(event.target.result, function(img) {
+                canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas), {
+                    scaleX: canvas.width / img.width,
+                    scaleY: canvas.height / img.height
+                });
+            });
+        };
+        reader.readAsDataURL(e.target.files[0]);
+    });
+
+    // Handle Canvas Clicks
+    canvas.on('mouse:down', function(options) {
+        if(options.target) return; // Ignore if clicking an existing tag
+        const pointer = canvas.getPointer(options.e);
+        
+        // Show Modal at click position
+        const modal = document.getElementById('dataModal');
+        modal.style.display = 'block';
+        modal.style.left = options.e.clientX + 'px';
+        modal.style.top = options.e.clientY + 'px';
+        
+        document.getElementById('clickX').value = pointer.x;
+        document.getElementById('clickY').value = pointer.y;
+    });
+
+    function closeModal() { document.getElementById('dataModal').style.display = 'none'; }
+
+    // Save Data and Draw Tag
+    function saveData() {
+        const type = document.getElementById('entryType').value;
+        const desc = document.getElementById('desc').value;
+        const length = parseFloat(document.getElementById('length').value) || 0;
+        const height = parseFloat(document.getElementById('height').value) || 0;
+        const category = document.getElementById('category').value;
+        const x = parseFloat(document.getElementById('clickX').value);
+        const y = parseFloat(document.getElementById('clickY').value);
+
+        // Math Logic
+        const isDeduction = (type === 'Ded');
+        let qty = length * height;
+        if(isDeduction) qty = -Math.abs(qty);
+
+        const currentId = 'P' + panelCounter++;
+        
+        const record = {
+            panelId: currentId,
+            type: type,
+            description: desc,
+            count: isDeduction ? -1 : 1,
+            length: length,
+            height: height,
+            category: category,
+            quantity: qty.toFixed(2)
+        };
+
+        capturedData.push(record);
+        updateTable();
+
+        // Draw Tag on Image
+        const color = category === 'Duct Wall' ? 'green' : (category === 'Dead Wall' ? 'blue' : 'red');
+        const text = new fabric.Text(`[${currentId}] ${desc}\nL:${length} H:${height}`, {
+            left: x, top: y, fontSize: 14, fill: 'white', backgroundColor: color, padding: 5
+        });
+        canvas.add(text);
+        
+        // Reset and Close
+        document.getElementById('desc').value = '';
+        document.getElementById('length').value = '';
+        document.getElementById('height').value = '';
+        closeModal();
+    }
+
+    function updateTable() {
+        const tbody = document.getElementById('tableBody');
+        tbody.innerHTML = '';
+        capturedData.forEach(r => {
+            tbody.innerHTML += `<tr>
+                <td>${r.panelId}</td><td>${r.type}</td><td>${r.description}</td>
+                <td>${r.length}</td><td>${r.height}</td><td>${r.category}</td><td>${r.quantity}</td>
+            </tr>`;
+        });
+    }
+
+    // Client-Side Excel Export
+    function downloadExcel() {
+        if(capturedData.length === 0) return alert("No data to export!");
+        const worksheet = XLSX.utils.json_to_sheet(capturedData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "LayoutData");
+        XLSX.writeFile(workbook, "Layout_Measurements.xlsx");
+    }
+
+    // Sync to Cloudflare Worker
+    async function submitToCloudflare() {
+        if(capturedData.length === 0) return alert("No data to sync!");
+        
+        const workerUrl = "https://patient-truth-615b.app-standardengineering.workers.dev/"; // Update this
+        
+        try {
+            const response = await fetch(workerUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(capturedData)
+            });
+            const result = await response.json();
+            if(result.status === "success") {
+                alert("Successfully synced to Google Sheets!");
+            } else {
+                alert("Server error: " + result.message);
+            }
+        } catch (e) {
+            alert("Network error. Ensure your Cloudflare Worker URL is correct.");
+        }
+    }
+</script>
+</body>
+</html>
