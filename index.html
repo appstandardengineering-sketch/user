@@ -41,7 +41,7 @@
   <button id="syncBtn" onclick="syncSheets()" style="background:#28a745">🚀 Sync to Google Sheets</button>
 </div>
 
-<div id="status">v6 · No image loaded yet</div>
+<div id="status">v7 · No image loaded yet</div>
 <div id="zoombar">
   <button onclick="zoomBy(-0.5)">−</button>
   <span id="zoomLabel">100%</span>
@@ -97,7 +97,7 @@
   // The photo is shown in a plain <img>; the fabric canvas sits transparently on top for tags
   canvas.wrapperEl.style.display = 'none'; // hidden until an image is loaded
   let currentUrl = null;
-  function setStatus(t) { $('status').textContent = 'v6 · ' + t; }
+  function setStatus(t) { $('status').textContent = 'v7 · ' + t; }
 
   // Image loading (camera + file share one handler)
   function loadInto(bg, url) {
@@ -160,7 +160,7 @@
     canvas.wrapperEl.style.display = 'block';
     applyZoom(1);
     input.value = '';
-    setStatus('Image loaded (' + bg.naturalWidth + '×' + bg.naturalHeight + '). Tap the image to add a tag.');
+    setStatus('Image loaded (' + bg.naturalWidth + '×' + bg.naturalHeight + '). Tap to tag, drag to move, pinch or use +/− to zoom.');
   }
   $('camLoader').addEventListener('change', loadImage);
   $('fileLoader').addEventListener('change', loadImage);
@@ -182,24 +182,64 @@
   }
   function zoomBy(d) { if (baseW) applyZoom(zoom + d); }
 
-  // A quick tap opens the form; dragging pans the image (native scrolling)
+  // Gestures handled here: tap = open form, one-finger drag = pan, two-finger pinch = zoom
   const up = canvas.upperCanvasEl;
-  up.style.touchAction = canvas.wrapperEl.style.touchAction = 'pan-x pan-y';
-  let down = null;
+  up.style.touchAction = canvas.wrapperEl.style.touchAction = 'none'; // we do the panning ourselves
+  const ptrs = new Map();
+  let tap = null, last = null, pinch0 = null, raf = 0, nextZ = 1;
+  const dist = () => { const [a, b] = [...ptrs.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+  const queueZoom = z => { // at most one resize per frame while pinching
+    nextZ = z;
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; applyZoom(nextZ); });
+  };
+
   up.addEventListener('pointerdown', e => {
-    down = e.isPrimary ? { x: e.clientX, y: e.clientY, t: Date.now() } : null;
+    try { up.setPointerCapture(e.pointerId); } catch (_) {}
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size === 1) {
+      tap = { x: e.clientX, y: e.clientY, t: Date.now() };
+      last = { x: e.clientX, y: e.clientY };
+    } else {
+      tap = null;
+      pinch0 = { d: dist() || 1, z: zoom };
+    }
   });
-  up.addEventListener('pointercancel', () => { down = null; }); // the browser took over for scrolling
-  up.addEventListener('pointerup', e => {
-    if (!down) return;
-    const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
-    const quick = Date.now() - down.t < 700;
-    down = null;
-    if (moved > 10 || !quick) return; // a pan or long press, not a tap
-    const r = up.getBoundingClientRect();
-    point = { x: (e.clientX - r.left) / zoom, y: (e.clientY - r.top) / zoom };
-    $('dataModal').style.display = 'block';
+
+  up.addEventListener('pointermove', e => {
+    if (!ptrs.has(e.pointerId)) return;
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size === 2 && pinch0) {
+      queueZoom(pinch0.z * dist() / pinch0.d);
+    } else if (ptrs.size === 1 && last) {
+      if (tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 10) tap = null; // it is a drag now
+      if (!tap) {
+        const v = $('viewer');
+        v.scrollLeft -= e.clientX - last.x;
+        v.scrollTop -= e.clientY - last.y;
+      }
+      last = { x: e.clientX, y: e.clientY };
+    }
   });
+
+  const endPointer = e => {
+    if (!ptrs.has(e.pointerId)) return;
+    const wasTap = tap && e.type === 'pointerup' && ptrs.size === 1 && Date.now() - tap.t < 700;
+    ptrs.delete(e.pointerId);
+    if (ptrs.size < 2) pinch0 = null;
+    if (ptrs.size === 1) { // one finger left after a pinch: carry on as a pan, no form
+      const p = [...ptrs.values()][0];
+      last = { x: p.x, y: p.y };
+      tap = null;
+    }
+    if (wasTap) {
+      const r = up.getBoundingClientRect();
+      point = { x: (e.clientX - r.left) / zoom, y: (e.clientY - r.top) / zoom };
+      $('dataModal').style.display = 'block';
+    }
+    if (ptrs.size === 0) { tap = null; last = null; }
+  };
+  up.addEventListener('pointerup', endPointer);
+  up.addEventListener('pointercancel', endPointer);
 
   function closeModal() { $('dataModal').style.display = 'none'; }
 
