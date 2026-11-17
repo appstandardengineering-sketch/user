@@ -13,8 +13,11 @@
   button:hover, .btn:hover { background: #1e4e79; }
   button:disabled { opacity: .6; cursor: wait; }
   .btn input { display: none; }
-  #stage { width: 100%; max-width: 1200px; }
-  canvas { border: 1px solid #ccc; background: #fff; }
+  #stage { position: relative; width: 100%; max-width: 1200px; }
+  #bg { display: none; width: 100%; height: auto; }
+  #stage .canvas-container { position: absolute !important; left: 0; top: 0; }
+  canvas { background: transparent; }
+  #status { font-size: 13px; margin: 6px 0; color: #333; }
   .modal { display: none; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(92vw, 360px); max-height: 90vh; overflow: auto; box-sizing: border-box; background: #fff; padding: 15px; border: 1px solid #333; box-shadow: 0 4px 16px rgba(0,0,0,.35); z-index: 10; border-radius: 8px; }
   .modal label { display: block; font-size: 13px; margin-top: 6px; }
   .modal input, .modal select { width: 100%; box-sizing: border-box; padding: 8px; margin: 3px 0 8px; font-size: 16px; }
@@ -35,7 +38,8 @@
   <button id="syncBtn" onclick="syncSheets()" style="background:#28a745">🚀 Sync to Google Sheets</button>
 </div>
 
-<div id="stage"><canvas id="layoutCanvas" width="800" height="600"></canvas></div>
+<div id="status">v3 · No image loaded yet</div>
+<div id="stage"><img id="bg" alt=""><canvas id="layoutCanvas" width="800" height="600"></canvas></div>
 
 <div id="dataModal" class="modal">
   <h3 style="margin-top:0">Panel Details</h3>
@@ -81,37 +85,37 @@
   let counter = 1;
   let point = null;
 
+  // The photo is shown in a plain <img>; the fabric canvas sits transparently on top for tags
+  canvas.wrapperEl.style.display = 'none'; // hidden until an image is loaded
+  let currentUrl = null;
+  function setStatus(t) { $('status').textContent = 'v3 · ' + t; }
+
   // Image loading (camera + file share one handler)
   function loadImage(e) {
-  const input = e.target;
-  const file = input.files[0];
-  if (!file) return;
-  const url = URL.createObjectURL(file);
-  const im = new Image();
-  im.onload = () => {
-    // shrink big phone photos so the browser can handle them
-    const MAX = 1600;
-    const k = Math.min(1, MAX / Math.max(im.naturalWidth, im.naturalHeight));
-    const off = document.createElement('canvas');
-    off.width = Math.round(im.naturalWidth * k);
-    off.height = Math.round(im.naturalHeight * k);
-    off.getContext('2d').drawImage(im, 0, 0, off.width, off.height);
-    URL.revokeObjectURL(url);
-    fabric.Image.fromURL(off.toDataURL('image/jpeg', 0.85), img => {
-      const w = Math.min($('stage').clientWidth || 800, 1200);
-      const s = w / img.width;
-      canvas.setDimensions({ width: w, height: Math.round(img.height * s) });
-      canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas), { scaleX: s, scaleY: s });
-      input.value = ''; // clear only after the image is loaded
-    });
-  };
-  im.onerror = () => {
-    URL.revokeObjectURL(url);
-    alert('Could not open this image. If it is HEIC/HEIF, pick a JPEG or PNG, or use Take photo.');
-    input.value = '';
-  };
-  im.src = url;
-}
+    const input = e.target;
+    const file = input.files && input.files[0];
+    if (!file) { setStatus('The picker did not return a file'); return; }
+    setStatus('Selected ' + file.name + ' (' + Math.round(file.size / 1024) + ' KB, ' + (file.type || 'unknown type') + ')…');
+    if (currentUrl) URL.revokeObjectURL(currentUrl);
+    currentUrl = URL.createObjectURL(file);
+    const bg = $('bg');
+    bg.onload = () => {
+      bg.style.display = 'block';
+      const w = $('stage').clientWidth;
+      const h = bg.clientHeight;
+      canvas.setDimensions({ width: w, height: h });
+      canvas.wrapperEl.style.display = 'block';
+      canvas.renderAll();
+      setStatus('Image loaded (' + bg.naturalWidth + '×' + bg.naturalHeight + '). Tap the image to add a tag.');
+      input.value = '';
+    };
+    bg.onerror = () => {
+      setStatus('The browser could not read this image (' + (file.type || 'unknown type') + ')');
+      alert('Could not open this image. Try a JPEG or PNG.');
+      input.value = '';
+    };
+    bg.src = currentUrl;
+  }
   $('camLoader').addEventListener('change', loadImage);
   $('fileLoader').addEventListener('change', loadImage);
 
