@@ -38,7 +38,7 @@
   <button id="syncBtn" onclick="syncSheets()" style="background:#28a745">🚀 Sync to Google Sheets</button>
 </div>
 
-<div id="status">v4 · No image loaded yet</div>
+<div id="status">v5 · No image loaded yet</div>
 <div id="stage"><img id="bg" alt=""><canvas id="layoutCanvas" width="800" height="600"></canvas></div>
 
 <div id="dataModal" class="modal">
@@ -88,7 +88,7 @@
   // The photo is shown in a plain <img>; the fabric canvas sits transparently on top for tags
   canvas.wrapperEl.style.display = 'none'; // hidden until an image is loaded
   let currentUrl = null;
-  function setStatus(t) { $('status').textContent = 'v4 · ' + t; }
+  function setStatus(t) { $('status').textContent = 'v5 · ' + t; }
 
   // Image loading (camera + file share one handler)
   function loadInto(bg, url) {
@@ -107,16 +107,13 @@
     setStatus('Reading ' + info + '…');
 
     // Copy the bytes right away; some Android pickers make the file unreadable later
-    let blob;
+    let blob = file, readErr = '';
     try {
       blob = new Blob([await file.arrayBuffer()], { type: file.type || 'image/jpeg' });
-    } catch (err) {
-      setStatus('Could not read ' + info + ' — ' + err.name);
-      alert('Could not read this file. Try saving it to the phone first, or use Take photo.');
       input.value = '';
-      return;
+    } catch (err) {
+      readErr = err.name; // keep the original file and try to display it directly
     }
-    input.value = '';
 
     const bg = $('bg');
     if (currentUrl) URL.revokeObjectURL(currentUrl);
@@ -137,8 +134,9 @@
         currentUrl = URL.createObjectURL(out);
         await loadInto(bg, currentUrl);
       } catch (err) {
-        setStatus('Cannot decode ' + info + ' — ' + ((err && err.name) || 'error'));
-        alert('Your browser cannot open this image (' + (file.type || 'unknown type') + '). Try another photo or use Take photo.');
+        setStatus('Cannot open ' + info + ' — ' + (readErr || (err && err.name) || 'error'));
+        alert('Your phone would not let the browser read this file. Pick it from the Files app (Downloads or Images) instead, or use Take photo.');
+        input.value = '';
         return;
       }
     }
@@ -147,6 +145,7 @@
     canvas.setDimensions({ width: $('stage').clientWidth, height: bg.clientHeight });
     canvas.wrapperEl.style.display = 'block';
     canvas.renderAll();
+    input.value = '';
     setStatus('Image loaded (' + bg.naturalWidth + '×' + bg.naturalHeight + '). Tap the image to add a tag.');
   }
   $('camLoader').addEventListener('change', loadImage);
